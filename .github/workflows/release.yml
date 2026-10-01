@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Xcode
+        run: |
+          if [ -d "/Applications/Xcode_16.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.app
+          elif [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: Build release binary
+        run: |
+          swift build -c release
+
+      - name: Run diagnostic test suite
+        run: |
+          BIN_PATH="$(swift build -c release --show-bin-path)"
+          "$BIN_PATH/sayx" test
+
+      - name: Package release assets
+        run: |
+          BIN_PATH="$(swift build -c release --show-bin-path)"
+          BINARY="$BIN_PATH/sayx"
+
+          # Re-apply ad-hoc signature for distribution
+          codesign --force --sign - "$BINARY"
+
+          # Prepare packaging directory
+          mkdir -p dist/staging
+          cp "$BINARY" dist/staging/sayx
+          cp README.md dist/staging/
+          cp LICENSE dist/staging/
+
+          # Package tarball
+          tar -czvf dist/sayx-macos-arm64.tar.gz -C dist/staging sayx README.md LICENSE
+
+          # Provide standalone binary
+          cp "$BINARY" dist/sayx-macos-arm64
+          chmod +x dist/sayx-macos-arm64
+
+          # Compute SHA256 checksums
+          cd dist
+          shasum -a 256 sayx-macos-arm64.tar.gz sayx-macos-arm64 > SHA256SUMS
+          cat SHA256SUMS
+          cd ..
+
+      - name: Publish GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists, uploading assets..."
+            gh release upload "$TAG" \
+              dist/sayx-macos-arm64.tar.gz \
+              dist/sayx-macos-arm64 \
+              dist/SHA256SUMS \
+              --clobber
+          else
+            echo "Creating new release for $TAG..."
+            gh release create "$TAG" \
+              dist/sayx-macos-arm64.tar.gz \
+              dist/sayx-macos-arm64 \
+              dist/SHA256SUMS \
+              --title "sayx $TAG" \
+              --generate-notes
+          fi
