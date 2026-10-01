@@ -222,7 +222,7 @@ Sources/SayX/
 ├── IPC/
 │   ├── SocketServer.swift     # Non-blocking AF_UNIX stream server
 │   └── TelemetryEvent.swift   # Bidirectional JSON telemetry protocol
-└── main.swift                 # Application entrypoint
+└── SayX.swift                 # Application entrypoint (@main)
 ```
 
 ---
