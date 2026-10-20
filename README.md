@@ -17,7 +17,7 @@
 - **CoreAudio DSP & Accelerate SIMD Normalization:** Pitch-invariant speed stretching (0.03x to 32.0x) and semitone pitch modulation (-2400 to +2400 cents) via `AVAudioUnitTimePitch`, paired with -1.0 dBFS peak normalization via Apple Accelerate `vDSP`. See [Audio DSP Guide](docs/audio-dsp.md).
 - **Unix Domain Socket Daemon:** Headless streaming daemon (`sayx listen`) over `/tmp/sayx.sock` with bidirectional JSON telemetry and master recording capture (`--tee`). See [Daemon Guide](docs/daemon.md).
 - **Offline File Export:** Render long-form audio directly to WAV files at >25x real-time speed.
-- **Built-in Diagnostic Test Suite:** Comprehensive test harness (`sayx test`) validating SIMD math, sample rate converters, audio filters, sentence tokenization, and voice routing.
+- **Comprehensive Swift Testing Suite:** Full unit and integration test coverage (`swift test`) validating SIMD math, sample rate converters, audio filters, sentence tokenization, voice routing, and Apple Neural Engine pipelines.
 
 ---
 
@@ -139,11 +139,17 @@ sayx listen --socket /tmp/sayx.sock --tee master_recording.wav
 printf "[v:adam] Chapter 1: The Beginning.\n[v:bella] Everything was quiet.\n" | nc -U /tmp/sayx.sock
 ```
 
-### Built-in Diagnostics
+### Running Tests
 
 ```bash
-# Run unit test suite
-sayx test
+# Run unit test suite (fast, offline, no model downloads)
+swift test --filter SayXUnitTests
+
+# Run full integration test suite (ANE inference & IPC)
+swift test --filter SayXIntegrationTests
+
+# Run entire test suite
+swift test --filter .
 ```
 
 ---
@@ -157,14 +163,12 @@ Usage:
   sayx voice clone <AUDIO> --name <ID>   Clone a new voice on-device from an audio sample
   sayx voice list                        List all installed custom voices
   sayx voice rm <ID>                     Delete an installed custom voice
-  sayx test                              Run built-in diagnostic test suite
 
 Commands:
   listen                 Start background streaming daemon (/tmp/sayx.sock)
   voice clone            Clone a custom voice from an audio file (.wav, .mp3, .m4a)
   voice list             List all available custom voice presets
   voice rm, delete       Remove an installed custom voice preset
-  test                   Run built-in diagnostic test suite
 
 TTS Options:
   -v, --voice <VOICE>    Voice alias, canonical ID, or cloned preset [default: heart]

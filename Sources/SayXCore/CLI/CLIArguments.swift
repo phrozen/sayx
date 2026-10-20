@@ -7,7 +7,6 @@ public enum ParsedCommand {
     case voiceClone(VoiceCloneOptions)
     case voiceList
     case voiceDelete(name: String)
-    case test
     case help
     case version
 }
@@ -56,9 +55,6 @@ public enum CLIParser {
             
         case "-V", "--version":
             return .version
-            
-        case "test":
-            return .test
             
         case "listen":
             return parseListenCommand(Array(arguments.dropFirst()))

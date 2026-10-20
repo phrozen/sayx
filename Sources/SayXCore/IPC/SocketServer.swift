@@ -116,6 +116,9 @@ public final class SocketServer: @unchecked Sendable {
                 continue
             }
             
+            var nosigpipe: Int32 = 1
+            setsockopt(clientFd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
+            
             // Handle client session
             await handleClient(fd: clientFd, streamer: streamer)
         }
@@ -158,11 +161,13 @@ public final class SocketServer: @unchecked Sendable {
         var pendingString = ""
         var activeVoice = defaultVoice
         var activeLang: String? = nil
+        var clientDisconnected = false
         
         while isRunning {
             let bytesRead = Darwin.read(fd, &buffer, buffer.count)
             if bytesRead <= 0 {
                 // Client disconnected
+                clientDisconnected = true
                 break
             }
             
@@ -181,12 +186,14 @@ public final class SocketServer: @unchecked Sendable {
             }
         }
         
-        sendTelemetry(
-            to: fd,
-            event: "idle",
-            queuedSeconds: streamer.queuedSeconds,
-            state: streamer.isPlaying ? "playing" : "idle"
-        )
+        if !clientDisconnected {
+            sendTelemetry(
+                to: fd,
+                event: "idle",
+                queuedSeconds: streamer.queuedSeconds,
+                state: streamer.isPlaying ? "playing" : "idle"
+            )
+        }
     }
     
     private func processLine(

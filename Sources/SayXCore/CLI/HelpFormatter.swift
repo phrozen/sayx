@@ -15,13 +15,11 @@ Usage:
   sayx listen [OPTIONS]                  Run background Unix Domain Socket daemon
   sayx voice clone <AUDIO> --name <ID>   Clone a new voice on-device from a WAV sample
   sayx voice list                        List all installed built-in & cloned voices
-  sayx test                              Run built-in test suite (SIMD, NLP, Voices)
 
 Commands:
   listen                 Start background streaming daemon (/tmp/sayx.sock)
   voice clone            Clone a custom voice from an audio file (.wav, .mp3, .m4a)
   voice list             List all available voices and presets
-  test                   Run built-in diagnostic test suite
 
 TTS Options:
   -v, --voice <VOICE>    Voice to use (Kokoro, PocketTTS, Supertonic, or preset) [default: heart]

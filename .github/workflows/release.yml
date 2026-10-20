@@ -40,10 +40,9 @@ jobs:
         run: |
           swift build -c release
 
-      - name: Run diagnostic test suite
+      - name: Run unit test suite
         run: |
-          BIN_PATH="$(swift build -c release --show-bin-path)"
-          "$BIN_PATH/sayx" test
+          swift test --filter SayXUnitTests
 
       - name: Package release assets
         run: |

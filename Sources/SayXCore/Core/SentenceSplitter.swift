@@ -16,7 +16,7 @@ import NaturalLanguage
 public enum SentenceSplitter {
     
     private static let speakerTagRegex = try! NSRegularExpression(
-        pattern: #"(?i)\[(?:v(?:oice)?\s*:\s*([a-zA-Z0-9_\-/\.]+)(?:(?:\s*[,:]\s*(?:l(?:ang(?:uage)?)?\s*:\s*)?|\s*:\s*)([a-zA-Z0-9_\-]+))?|l(?:ang(?:uage)?)\s*:\s*([a-zA-Z0-9_\-]+))\]"#
+        pattern: #"(?i)\[(?:v(?:oice)?\s*:\s*([a-zA-Z0-9_\-/\.]+)(?:(?:\s*[,:]\s*(?:l(?:ang(?:uage)?)?\s*:\s*)?|\s*:\s*)([a-zA-Z0-9_\-]+))?|l(?:ang(?:uage)?)?\s*:\s*([a-zA-Z0-9_\-]+))\]"#
     )
     
     /// Extracts speaker voice and language tags (e.g. `[v:adam]`, `[v:m1,l:es]`, `[l:es]`) from text.
