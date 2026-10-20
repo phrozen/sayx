@@ -8,30 +8,47 @@ import NaturalLanguage
 ///
 /// Features:
 /// - Native Darwin/macOS framework: 0 MB weights, microsecond latency.
-/// - Accurately preserves abbreviations (`Dr.`, `Mr.`, `St.`, `e.g.`, `p.m.`).
-/// - Handles currencies, decimals, and percentages (`$3.50`, `3.8%`, `v2.0`).
-/// - Handles trailing dialogue quotes and non-Latin punctuation (Japanese `。`, Spanish `¿?`).
-/// - Seamlessly isolates inline multi-voice tags (`[v:adam]`, `[v:bella]`) across speaker turns.
+/// - Accurately preserves abbreviations (Dr., Mr., St., e.g., p.m.).
+/// - Handles currencies, decimals, and percentages ($3.50, 3.8%, v2.0).
+/// - Handles trailing dialogue quotes and non-Latin punctuation (Japanese 。, Spanish ¿?).
+/// - Seamlessly isolates inline multi-voice and multi-language tags ([v:adam], [v:m1,l:es]) across speaker turns.
 /// - Breaks abnormally long run-on sentences (> 35 words) on pause punctuation to maintain sub-200ms TTFA.
 public enum SentenceSplitter {
     
-    private static let voiceTagRegex = try! NSRegularExpression(
-        pattern: #"(?i)\[v(?:oice)?:([a-zA-Z0-9_\-]+)\]"#
+    private static let speakerTagRegex = try! NSRegularExpression(
+        pattern: #"(?i)\[(?:v(?:oice)?\s*:\s*([a-zA-Z0-9_\-/\.]+)(?:(?:\s*[,:]\s*(?:l(?:ang(?:uage)?)?\s*:\s*)?|\s*:\s*)([a-zA-Z0-9_\-]+))?|l(?:ang(?:uage)?)\s*:\s*([a-zA-Z0-9_\-]+))\]"#
     )
+    
+    /// Extracts speaker voice and language tags (e.g. `[v:adam]`, `[v:m1,l:es]`, `[l:es]`) from text.
+    public static func extractSpeakerTag(from text: String) -> (voice: String?, language: String?, cleanText: String) {
+        guard let match = speakerTagRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let tagRange = Range(match.range, in: text) else {
+            return (nil, nil, text)
+        }
+        
+        var voice: String? = nil
+        var lang: String? = nil
+        
+        if match.range(at: 1).location != NSNotFound, let r1 = Range(match.range(at: 1), in: text) {
+            voice = String(text[r1])
+        }
+        if match.range(at: 2).location != NSNotFound, let r2 = Range(match.range(at: 2), in: text) {
+            lang = String(text[r2])
+        }
+        if match.range(at: 3).location != NSNotFound, let r3 = Range(match.range(at: 3), in: text) {
+            lang = String(text[r3])
+        }
+        
+        var clean = text
+        clean.removeSubrange(tagRange)
+        return (voice, lang, clean.trimmingCharacters(in: .whitespaces))
+    }
     
     /// Extracts an optional voice tag (e.g. `[v:adam]`, `[voice:bella]`) from text,
     /// returning the extracted voice name and the cleaned narrative text.
     public static func extractVoiceTag(from text: String) -> (voice: String?, cleanText: String) {
-        guard let match = voiceTagRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let tagRange = Range(match.range, in: text),
-              let nameRange = Range(match.range(at: 1), in: text) else {
-            return (nil, text)
-        }
-        
-        let voiceName = String(text[nameRange])
-        var clean = text
-        clean.removeSubrange(tagRange)
-        return (voiceName, clean.trimmingCharacters(in: .whitespaces))
+        let (voice, _, clean) = extractSpeakerTag(from: text)
+        return (voice, clean)
     }
     
     /// Splits long-form text into an ordered sequence of sentence chunks ready for streaming speech synthesis.
@@ -62,11 +79,11 @@ public enum SentenceSplitter {
             let paragraph = rawParagraph.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !paragraph.isEmpty else { continue }
             
-            // 3. Segment paragraph by voice tags so speaker changes always start a new chunk
+            // 3. Segment paragraph by speaker tags so speaker changes always start a new chunk
             let sections = splitByVoiceTags(paragraph)
             
             for section in sections {
-                let (voiceTag, narrative) = extractVoiceTag(from: section)
+                let (voiceTag, langTag, narrative) = extractSpeakerTag(from: section)
                 guard !narrative.isEmpty else { continue }
                 
                 // 4. Tokenize narrative sentences with Apple NLTokenizer
@@ -81,8 +98,16 @@ public enum SentenceSplitter {
                         let trimmedChunk = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !trimmedChunk.isEmpty else { continue }
                         
-                        if isFirst, let tag = voiceTag {
-                            results.append("[v:\(tag)] \(trimmedChunk)")
+                        if isFirst {
+                            var tagPrefix = ""
+                            if let v = voiceTag, let l = langTag {
+                                tagPrefix = "[v:\(v),l:\(l)] "
+                            } else if let v = voiceTag {
+                                tagPrefix = "[v:\(v)] "
+                            } else if let l = langTag {
+                                tagPrefix = "[l:\(l)] "
+                            }
+                            results.append("\(tagPrefix)\(trimmedChunk)")
                             isFirst = false
                         } else {
                             results.append(trimmedChunk)
@@ -108,17 +133,23 @@ public enum SentenceSplitter {
         case "it", "ita", "italian": return .italian
         case "pt", "por", "portuguese": return .portuguese
         case "ja", "jpn", "japanese": return .japanese
+        case "ko", "kor", "korean": return .korean
         case "zh", "zho", "chinese", "mandarin": return .simplifiedChinese
+        case "ru", "rus", "russian": return .russian
+        case "nl", "nld", "dutch": return .dutch
+        case "pl", "pol", "polish": return .polish
+        case "tr", "tur", "turkish": return .turkish
+        case "ar", "ara", "arabic": return .arabic
         default: return NLLanguage(rawValue: code)
         }
     }
     
     // MARK: - Private Helpers
     
-    /// Splits text at voice tag boundaries so each speaker turn is an isolated section.
+    /// Splits text at speaker tag boundaries so each speaker/turn change is an isolated section.
     private static func splitByVoiceTags(_ text: String) -> [String] {
         let nsString = text as NSString
-        let matches = voiceTagRegex.matches(in: text, range: NSRange(location: 0, length: nsString.length))
+        let matches = speakerTagRegex.matches(in: text, range: NSRange(location: 0, length: nsString.length))
         
         guard !matches.isEmpty else { return [text] }
         

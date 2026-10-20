@@ -36,7 +36,24 @@ public enum VoicePreset {
     public static func exists(named voiceName: String) -> Bool {
         let dir = directory(for: voiceName)
         let binFile = dir.appendingPathComponent("pocket_voice.bin")
-        return FileManager.default.fileExists(atPath: binFile.path)
+        if FileManager.default.fileExists(atPath: binFile.path) {
+            return true
+        }
+        return findSupertonicStyle(named: voiceName) != nil
+    }
+    
+    /// Searches for a custom Supertonic style JSON in `~/.cache/sayx/voices/<name>/style.json` or `<name>.json`
+    public static func findSupertonicStyle(named voiceName: String) -> URL? {
+        let dir = directory(for: voiceName)
+        let styleInDir = dir.appendingPathComponent("style.json")
+        if FileManager.default.fileExists(atPath: styleInDir.path) {
+            return styleInDir
+        }
+        let styleDirect = voicesDirectory.appendingPathComponent("\(voiceName.lowercased()).json")
+        if FileManager.default.fileExists(atPath: styleDirect.path) {
+            return styleDirect
+        }
+        return nil
     }
     
     /// Loads a saved PocketTTS voice conditioning preset from disk, if available.
@@ -97,9 +114,25 @@ public enum VoicePreset {
         
         for item in items {
             let jsonFile = item.appendingPathComponent("voice.json")
+            let styleFile = item.appendingPathComponent("style.json")
             if let data = try? Data(contentsOf: jsonFile),
                let meta = try? decoder.decode(VoiceMetadata.self, from: data) {
                 results.append(meta)
+            } else if FileManager.default.fileExists(atPath: styleFile.path) {
+                results.append(VoiceMetadata(
+                    name: item.lastPathComponent,
+                    engine: "supertonic",
+                    language: "31 langs",
+                    createdAt: "local style"
+                ))
+            } else if item.pathExtension == "json" && item.lastPathComponent != "voice.json" {
+                let name = item.deletingPathExtension().lastPathComponent
+                results.append(VoiceMetadata(
+                    name: name,
+                    engine: "supertonic",
+                    language: "31 langs",
+                    createdAt: "local style"
+                ))
             } else if exists(named: item.lastPathComponent) {
                 // Fallback if voice.json is missing
                 results.append(VoiceMetadata(

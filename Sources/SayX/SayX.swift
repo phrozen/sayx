@@ -53,10 +53,14 @@ struct SayX {
     // MARK: - Subcommand Runners
     
     private static func runListenDaemon(_ opts: ListenOptions) async throws {
-        let effectiveVoice = opts.defaultVoice ?? (opts.engine?.lowercased() == "pocket" ? "alba" : "heart")
+        let effectiveVoice = opts.defaultVoice ?? (
+            opts.engine?.lowercased() == "pocket" ? "alba" :
+            (opts.engine?.lowercased() == "supertonic" ? "m1" : "heart")
+        )
         let dispatcher = EngineDispatcher(
             defaultVoice: effectiveVoice,
-            explicitEngine: opts.engine
+            explicitEngine: opts.engine,
+            steps: opts.steps
         )
         
         let server = SocketServer(
@@ -78,11 +82,15 @@ struct SayX {
     }
     
     private static func runTTS(_ opts: TTSOptions) async throws {
-        let effectiveVoice = opts.rawVoice ?? (opts.engine?.lowercased() == "pocket" ? "alba" : "heart")
+        let effectiveVoice = opts.rawVoice ?? (
+            opts.engine?.lowercased() == "pocket" ? "alba" :
+            (opts.engine?.lowercased() == "supertonic" ? "m1" : "heart")
+        )
         let dispatcher = EngineDispatcher(
             defaultVoice: effectiveVoice,
             explicitEngine: opts.engine,
-            explicitLang: opts.language
+            explicitLang: opts.language,
+            steps: opts.steps
         )
         
         // Mode 1: Phonemizer only
@@ -101,14 +109,18 @@ struct SayX {
         let langHint = SentenceSplitter.resolveLanguage(code: opts.language)
         let sentences = SentenceSplitter.split(opts.text, language: langHint)
         var currentVoice = effectiveVoice
+        var currentLang = opts.language
         
         if let outPath = opts.outputPath {
             // File Export Mode (-o)
             var allSamples: [Float] = []
             for rawSentence in sentences {
-                let (tagVoice, sentence) = SentenceSplitter.extractVoiceTag(from: rawSentence)
+                let (tagVoice, tagLang, sentence) = SentenceSplitter.extractSpeakerTag(from: rawSentence)
                 if let tag = tagVoice {
                     currentVoice = tag
+                }
+                if let lang = tagLang {
+                    currentLang = lang
                 }
                 guard !sentence.isEmpty else { continue }
                 
@@ -116,7 +128,7 @@ struct SayX {
                 if opts.fromPhonemes {
                     samples = try await dispatcher.synthesizeFromPhonemes(sentence, voice: currentVoice)
                 } else {
-                    samples = try await dispatcher.synthesize(text: sentence, voice: currentVoice)
+                    samples = try await dispatcher.synthesize(text: sentence, voice: currentVoice, overrideLang: currentLang)
                 }
                 allSamples.append(contentsOf: samples)
             }
@@ -147,9 +159,12 @@ struct SayX {
             )
             
             for rawSentence in sentences {
-                let (tagVoice, sentence) = SentenceSplitter.extractVoiceTag(from: rawSentence)
+                let (tagVoice, tagLang, sentence) = SentenceSplitter.extractSpeakerTag(from: rawSentence)
                 if let tag = tagVoice {
                     currentVoice = tag
+                }
+                if let lang = tagLang {
+                    currentLang = lang
                 }
                 guard !sentence.isEmpty else { continue }
                 
@@ -161,7 +176,7 @@ struct SayX {
                 if opts.fromPhonemes {
                     samples = try await dispatcher.synthesizeFromPhonemes(sentence, voice: currentVoice)
                 } else {
-                    samples = try await dispatcher.synthesize(text: sentence, voice: currentVoice)
+                    samples = try await dispatcher.synthesize(text: sentence, voice: currentVoice, overrideLang: currentLang)
                 }
                 streamer.playChunk(samples: samples)
             }

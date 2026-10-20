@@ -157,6 +157,7 @@ public final class SocketServer: @unchecked Sendable {
         var buffer = [UInt8](repeating: 0, count: 4096)
         var pendingString = ""
         var activeVoice = defaultVoice
+        var activeLang: String? = nil
         
         while isRunning {
             let bytesRead = Darwin.read(fd, &buffer, buffer.count)
@@ -174,7 +175,7 @@ public final class SocketServer: @unchecked Sendable {
                     pendingString.removeSubrange(...newlineIndex)
                     
                     if !line.isEmpty {
-                        await processLine(line, activeVoice: &activeVoice, streamer: streamer, clientFd: fd)
+                        await processLine(line, activeVoice: &activeVoice, activeLang: &activeLang, streamer: streamer, clientFd: fd)
                     }
                 }
             }
@@ -191,6 +192,7 @@ public final class SocketServer: @unchecked Sendable {
     private func processLine(
         _ line: String,
         activeVoice: inout String,
+        activeLang: inout String?,
         streamer: AudioStreamer,
         clientFd: Int32
     ) async {
@@ -200,10 +202,13 @@ public final class SocketServer: @unchecked Sendable {
         let sentences = SentenceSplitter.split(trimmed)
         
         for rawSentence in sentences {
-            // Check for voice tag in this specific sentence chunk (e.g. [v:bella])
-            let (tagVoice, cleanSentence) = SentenceSplitter.extractVoiceTag(from: rawSentence)
+            // Check for speaker tag in this specific sentence chunk (e.g. [v:m1,l:es] or [v:bella])
+            let (tagVoice, tagLang, cleanSentence) = SentenceSplitter.extractSpeakerTag(from: rawSentence)
             if let tag = tagVoice {
                 activeVoice = tag
+            }
+            if let lang = tagLang {
+                activeLang = lang
             }
             
             guard !cleanSentence.isEmpty else { continue }
@@ -222,7 +227,7 @@ public final class SocketServer: @unchecked Sendable {
                 text: cleanSentence
             )
             
-            if let samples = try? await dispatcher.synthesize(text: cleanSentence, voice: activeVoice) {
+            if let samples = try? await dispatcher.synthesize(text: cleanSentence, voice: activeVoice, overrideLang: activeLang) {
                 streamer.playChunk(samples: samples)
             }
             

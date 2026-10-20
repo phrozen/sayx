@@ -20,6 +20,7 @@ public struct TTSOptions {
     public var language: String? = nil
     public var speed: Float = 1.0
     public var pitch: Float = 0.0
+    public var steps: Int = 5
     public var phonemesOnly: Bool = false
     public var showPhonemes: Bool = false
     public var fromPhonemes: Bool = false
@@ -32,6 +33,7 @@ public struct ListenOptions {
     public var teePath: String? = nil
     public var speed: Float = 1.0
     public var pitch: Float = 0.0
+    public var steps: Int = 5
 }
 
 public struct VoiceCloneOptions {
@@ -103,6 +105,11 @@ public enum CLIParser {
             case "--pitch":
                 if i + 1 < args.count, let val = Float(args[i + 1]) {
                     options.pitch = val
+                    i += 1
+                }
+            case "--steps":
+                if i + 1 < args.count, let val = Int(args[i + 1]), val > 0 {
+                    options.steps = val
                     i += 1
                 }
             case "-h", "--help":
@@ -246,11 +253,18 @@ public enum CLIParser {
                     i += 1
                 }
                 
+            case "--steps":
+                if i + 1 < args.count, let val = Int(args[i + 1]), val > 0 {
+                    options.steps = val
+                    i += 1
+                }
+                
             case "--listen":
                 // Flag style listen: sayx --listen [/tmp/sayx.sock]
                 var listenOpts = ListenOptions()
                 listenOpts.defaultVoice = options.rawVoice
                 listenOpts.engine = options.engine
+                listenOpts.steps = options.steps
                 if i + 1 < args.count && !args[i + 1].hasPrefix("-") {
                     listenOpts.socketPath = args[i + 1]
                     i += 1

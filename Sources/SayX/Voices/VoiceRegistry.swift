@@ -18,6 +18,7 @@ public struct VoiceInfo: Sendable {
 public enum ResolvedVoice: Sendable {
     case kokoro(canonicalVoice: String, variant: KokoroAneVariant)
     case pocket(voiceName: String, isCloned: Bool, language: PocketTtsLanguage)
+    case supertonic(voiceStyleName: String, isCustom: Bool, customURL: URL?, language: String)
 }
 
 /// Registry of all 54 Kokoro-82M voices and custom cloned presets.
@@ -133,6 +134,47 @@ public enum VoiceRegistry {
         VoiceInfo(id: "stuart_bell",    alias: "stuart_bell",    description: "PocketTTS Male"),
     ]
     
+    /// Full catalog of built-in Supertonic-3 character voice styles (Flow-Matching Diffusion on ANE).
+    public static let supertonicVoices: [VoiceInfo] = [
+        VoiceInfo(id: "m1", alias: "m-narrator",   description: "Supertonic Male 1 (Default, Clear Narrator)"),
+        VoiceInfo(id: "m2", alias: "m-casual",     description: "Supertonic Male 2 (Conversational)"),
+        VoiceInfo(id: "m3", alias: "m-dramatic",   description: "Supertonic Male 3 (Resonant / Dramatic)"),
+        VoiceInfo(id: "m4", alias: "m-deep",       description: "Supertonic Male 4 (Deep / Authoritative)"),
+        VoiceInfo(id: "m5", alias: "m-energetic",  description: "Supertonic Male 5 (Dynamic / Energetic)"),
+        VoiceInfo(id: "f1", alias: "f-studio",     description: "Supertonic Female 1 (Default, Studio Anchor)"),
+        VoiceInfo(id: "f2", alias: "f-casual",     description: "Supertonic Female 2 (Warm Conversational)"),
+        VoiceInfo(id: "f3", alias: "f-warm",       description: "Supertonic Female 3 (Gentle / Narrative)"),
+        VoiceInfo(id: "f4", alias: "f-expressive", description: "Supertonic Female 4 (Bright / Expressive)"),
+        VoiceInfo(id: "f5", alias: "f-calm",       description: "Supertonic Female 5 (Calm / Melodic)")
+    ]
+    
+    /// Maps friendly semantic aliases (e.g. m-narrator, studio) to Supertonic character IDs.
+    public static func resolveSupertonicAlias(_ query: String) -> String? {
+        let cleaned = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        switch cleaned {
+        case "m1", "m-1", "m_1", "m-narrator", "m_narrator", "narrator": return "m1"
+        case "m2", "m-2", "m_2", "m-casual", "m_casual": return "m2"
+        case "m3", "m-3", "m_3", "m-dramatic", "m_dramatic": return "m3"
+        case "m4", "m-4", "m_4", "m-deep", "m_deep": return "m4"
+        case "m5", "m-5", "m_5", "m-energetic", "m_energetic": return "m5"
+        case "f1", "f-1", "f_1", "f-studio", "f_studio", "studio": return "f1"
+        case "f2", "f-2", "f_2", "f-casual", "f_casual": return "f2"
+        case "f3", "f-3", "f_3", "f-warm", "f_warm": return "f3"
+        case "f4", "f-4", "f_4", "f-expressive", "f_expressive": return "f4"
+        case "f5", "f-5", "f_5", "f-calm", "f_calm": return "f5"
+        default: return nil
+        }
+    }
+    
+    /// Checks if a voice query matches any built-in, aliased, or custom Supertonic voice style.
+    public static func isSupertonicVoice(_ query: String) -> Bool {
+        let cleaned = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if resolveSupertonicAlias(cleaned) != nil { return true }
+        if cleaned.hasSuffix(".json") { return true }
+        if VoicePreset.findSupertonicStyle(named: cleaned) != nil { return true }
+        return false
+    }
+    
     /// Resolves an incoming voice name and returns the appropriate engine and configuration.
     public static func resolve(
         query: String,
@@ -143,6 +185,19 @@ public enum VoiceRegistry {
         
         // 1. Check if user explicitly requested an engine
         if let engine = explicitEngine?.lowercased() {
+            if engine == "supertonic" {
+                let lang = SupertonicEngine.resolveLanguageCode(explicitLang ?? "en")
+                if cleaned.hasSuffix(".json") {
+                    let url = URL(fileURLWithPath: cleaned)
+                    let styleName = url.deletingPathExtension().lastPathComponent
+                    return .supertonic(voiceStyleName: styleName, isCustom: true, customURL: url, language: lang)
+                }
+                if let customURL = VoicePreset.findSupertonicStyle(named: cleaned) {
+                    return .supertonic(voiceStyleName: cleaned, isCustom: true, customURL: customURL, language: lang)
+                }
+                let voice = resolveSupertonicAlias(cleaned) ?? (cleaned.isEmpty || cleaned == "heart" ? "m1" : cleaned)
+                return .supertonic(voiceStyleName: voice, isCustom: false, customURL: nil, language: lang)
+            }
             if engine == "pocket" {
                 let lang = VoiceCloner.resolveLanguage(explicitLang ?? "english")
                 let voice = (cleaned.isEmpty || cleaned == "heart") ? "alba" : cleaned
@@ -156,19 +211,38 @@ public enum VoiceRegistry {
             }
         }
         
-        // 2. Check if query matches a custom cloned voice preset
-        if VoicePreset.exists(named: cleaned) {
+        // 2. Check if query is a direct JSON file path for Supertonic style
+        if cleaned.hasSuffix(".json") {
+            let url = URL(fileURLWithPath: cleaned)
+            let lang = SupertonicEngine.resolveLanguageCode(explicitLang ?? "en")
+            return .supertonic(voiceStyleName: url.deletingPathExtension().lastPathComponent, isCustom: true, customURL: url, language: lang)
+        }
+        
+        // 3. Check if query matches a custom Supertonic style preset
+        if let customStyleURL = VoicePreset.findSupertonicStyle(named: cleaned) {
+            let lang = SupertonicEngine.resolveLanguageCode(explicitLang ?? "en")
+            return .supertonic(voiceStyleName: cleaned, isCustom: true, customURL: customStyleURL, language: lang)
+        }
+        
+        // 4. Check if query matches a built-in Supertonic voice or friendly alias
+        if let supertonicAlias = resolveSupertonicAlias(cleaned) {
+            let lang = SupertonicEngine.resolveLanguageCode(explicitLang ?? "en")
+            return .supertonic(voiceStyleName: supertonicAlias, isCustom: false, customURL: nil, language: lang)
+        }
+        
+        // 5. Check if query matches a custom cloned PocketTTS voice preset
+        if VoicePreset.exists(named: cleaned) && VoicePreset.loadPocketVoice(named: cleaned) != nil {
             let lang = VoiceCloner.resolveLanguage(explicitLang ?? "english")
             return .pocket(voiceName: cleaned, isCloned: true, language: lang)
         }
         
-        // 3. Check if query matches a built-in PocketTTS voice
+        // 6. Check if query matches a built-in PocketTTS voice
         if let pocketMatch = pocketVoices.first(where: { $0.id == cleaned || $0.alias == cleaned }) {
             let lang = VoiceCloner.resolveLanguage(explicitLang ?? "english")
             return .pocket(voiceName: pocketMatch.id, isCloned: false, language: lang)
         }
         
-        // 4. Otherwise default to Kokoro (54 built-in voices)
+        // 7. Otherwise default to Kokoro (54 built-in voices)
         let canonicalVoice = resolveKokoroVoice(cleaned)
         let variant = resolveKokoroVariant(for: canonicalVoice)
         return .kokoro(canonicalVoice: canonicalVoice, variant: variant)

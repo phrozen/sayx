@@ -27,9 +27,11 @@ public enum TestRunner {
         let results = Results()
         
         testAudioNormalizer(results: results)
+        testAudioResampler(results: results)
         testAudioEffects(results: results)
         testSentenceSplitter(results: results)
         testVoiceRegistry(results: results)
+        testSupertonicResolution(results: results)
         
         print("\n" + String(repeating: "=", count: 50))
         if results.failed == 0 {
@@ -71,6 +73,47 @@ public enum TestRunner {
         AudioNormalizer.rmsNormalize(&impulse, targetRMS: 0.20, peakCeiling: ceiling)
         vDSP_maxmgv(impulse, 1, &maxMag, vDSP_Length(impulse.count))
         results.check(maxMag <= ceiling + 1e-4, "RMS normalization respects peak limiter ceiling")
+    }
+    
+    private static func testAudioResampler(results: Results) {
+        print("\nSuite: AudioNormalizer.resample (AVAudioConverter CoreAudio)")
+        
+        // 1. Same-rate fast path
+        let original: [Float] = [0.1, 0.2, 0.3, 0.4, 0.5]
+        let sameRate = (try? AudioNormalizer.resample(samples: original, fromRate: 24000, toRate: 24000)) ?? []
+        results.check(sameRate == original, "Fast path preserves samples identically when rates match")
+        
+        // 2. 24 kHz to 44.1 kHz upsampling
+        let sampleCount = 2400
+        var sine24k = [Float](repeating: 0, count: sampleCount)
+        for i in 0..<sampleCount {
+            sine24k[i] = sin(Float(i) * 2.0 * .pi * 440.0 / 24000.0) * 0.5
+        }
+        
+        if let upsampled = try? AudioNormalizer.resample(samples: sine24k, fromRate: 24000, toRate: 44100) {
+            let ratio = Double(upsampled.count) / Double(sine24k.count)
+            let expectedRatio = 44100.0 / 24000.0 // 1.8375
+            let valid = upsampled.allSatisfy { !$0.isNaN && !$0.isInfinite }
+            results.check(valid && abs(ratio - expectedRatio) < 0.05, "Resamples 24 kHz to 44.1 kHz with correct sample ratio (ratio: \(String(format: "%.3f", ratio)))")
+        } else {
+            results.check(false, "Resamples 24 kHz to 44.1 kHz successfully")
+        }
+        
+        // 3. 44.1 kHz to 24 kHz downsampling
+        let sampleCount44k = 4410
+        var sine44k = [Float](repeating: 0, count: sampleCount44k)
+        for i in 0..<sampleCount44k {
+            sine44k[i] = sin(Float(i) * 2.0 * .pi * 440.0 / 44100.0) * 0.5
+        }
+        
+        if let downsampled = try? AudioNormalizer.resample(samples: sine44k, fromRate: 44100, toRate: 24000) {
+            let ratio = Double(downsampled.count) / Double(sine44k.count)
+            let expectedRatio = 24000.0 / 44100.0 // 0.5442
+            let valid = downsampled.allSatisfy { !$0.isNaN && !$0.isInfinite }
+            results.check(valid && abs(ratio - expectedRatio) < 0.05, "Resamples 44.1 kHz to 24 kHz with correct sample ratio (ratio: \(String(format: "%.3f", ratio)))")
+        } else {
+            results.check(false, "Resamples 44.1 kHz to 24 kHz successfully")
+        }
     }
     
     private static func testAudioEffects(results: Results) {
@@ -130,29 +173,35 @@ public enum TestRunner {
         results.check(sentences1.count == 2 && sentences1[0].contains("Dr. Watson") && sentences1[1].contains("$3.50"),
                       "Does not split on common English abbreviations and currency")
         
-        // 2. Voice tags
-        let text2 = "[v:adam] Hello world. [v:bella] How are you? Are you well? [v:adam] Doing fine."
+        // 2. Voice and language speaker tags
+        let text2 = "[v:m1,l:es] ¡Hola mundo! [v:m-narrator,l:en] Welcome back. [v:adam] Doing fine."
         let sentences2 = SentenceSplitter.split(text2)
-        let (v0, t0) = SentenceSplitter.extractVoiceTag(from: sentences2.first ?? "")
-        let (v1, t1) = SentenceSplitter.extractVoiceTag(from: sentences2.count > 1 ? sentences2[1] : "")
-        let (v2, _) = SentenceSplitter.extractVoiceTag(from: sentences2.count > 2 ? sentences2[2] : "")
-        let (v3, t3) = SentenceSplitter.extractVoiceTag(from: sentences2.count > 3 ? sentences2[3] : "")
+        let (v0, l0, t0) = SentenceSplitter.extractSpeakerTag(from: sentences2.first ?? "")
+        let (v1, l1, t1) = SentenceSplitter.extractSpeakerTag(from: sentences2.count > 1 ? sentences2[1] : "")
+        let (v2, l2, t2) = SentenceSplitter.extractSpeakerTag(from: sentences2.count > 2 ? sentences2[2] : "")
         
-        let tagsCorrect = sentences2.count == 4 && v0 == "adam" && t0 == "Hello world." &&
-                          v1 == "bella" && t1 == "How are you?" && v2 == nil &&
-                          v3 == "adam" && t3 == "Doing fine."
-        results.check(tagsCorrect, "Correctly extracts voice tags and isolates speaker turns")
+        let tagsCorrect = sentences2.count == 3 &&
+                          v0 == "m1" && l0 == "es" && t0 == "¡Hola mundo!" &&
+                          v1 == "m-narrator" && l1 == "en" && t1 == "Welcome back." &&
+                          v2 == "adam" && l2 == nil && t2 == "Doing fine."
+        results.check(tagsCorrect, "Correctly extracts multi-engine speaker tags and language codes")
         
-        // 3. Spanish abbreviations
-        let text3 = "¿Cómo estás, amigo? El Sr. Pérez dijo que vendría hoy. ¡Qué buena noticia!"
-        let sentences3 = SentenceSplitter.split(text3, language: .spanish)
-        results.check(sentences3.count == 3 && sentences3[1].contains("El Sr. Pérez"),
+        // 3. Angle bracket tags are not treated as speaker directives
+        let text3 = "That was amazing! <custom> Truly unbelievable. </custom>"
+        let (tagVoice, tagLang, cleanText) = SentenceSplitter.extractSpeakerTag(from: text3)
+        results.check(tagVoice == nil && tagLang == nil && cleanText.contains("Truly unbelievable."),
+                      "Does not mistake angle bracket tags for speaker directives")
+        
+        // 4. Spanish abbreviations
+        let text4 = "¿Cómo estás, amigo? El Sr. Pérez dijo que vendría hoy. ¡Qué buena noticia!"
+        let sentences4 = SentenceSplitter.split(text4, language: .spanish)
+        results.check(sentences4.count == 3 && sentences4[1].contains("El Sr. Pérez"),
                       "Protects Spanish abbreviations when Spanish language hint is provided")
         
-        // 4. Japanese full-width punctuation
-        let text4 = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。"
-        let sentences4 = SentenceSplitter.split(text4, language: .japanese)
-        results.check(sentences4.count == 3, "Splits Japanese full-width punctuation naturally")
+        // 5. Japanese full-width punctuation
+        let text5 = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。"
+        let sentences5 = SentenceSplitter.split(text5, language: .japanese)
+        results.check(sentences5.count == 3, "Splits Japanese full-width punctuation naturally")
     }
     
     private static func testVoiceRegistry(results: Results) {
@@ -202,5 +251,66 @@ public enum TestRunner {
         } else {
             results.check(false, "Normalizes default voice for pocket engine")
         }
+    }
+    
+    private static func testSupertonicResolution(results: Results) {
+        print("\nSuite: Supertonic-3 Voice & Language Resolution")
+        
+        // 1. Built-in voice IDs
+        let resM1 = VoiceRegistry.resolve(query: "m1")
+        if case .supertonic(let voice, let isCustom, _, let lang) = resM1 {
+            results.check(voice == "m1" && !isCustom && lang == "en", "Resolves 'm1' to Supertonic voice M1")
+        } else {
+            results.check(false, "Resolves 'm1' to Supertonic voice M1")
+        }
+        
+        let resF1 = VoiceRegistry.resolve(query: "f1")
+        if case .supertonic(let voice, let isCustom, _, _) = resF1 {
+            results.check(voice == "f1" && !isCustom, "Resolves 'f1' to Supertonic voice F1")
+        } else {
+            results.check(false, "Resolves 'f1' to Supertonic voice F1")
+        }
+        
+        // 2. Semantic Aliases
+        let resNarrator = VoiceRegistry.resolve(query: "m-narrator")
+        if case .supertonic(let voice, _, _, _) = resNarrator {
+            results.check(voice == "m1", "Resolves alias 'm-narrator' to 'm1'")
+        } else {
+            results.check(false, "Resolves alias 'm-narrator' to 'm1'")
+        }
+        
+        let resStudio = VoiceRegistry.resolve(query: "f-studio")
+        if case .supertonic(let voice, _, _, _) = resStudio {
+            results.check(voice == "f1", "Resolves alias 'f-studio' to 'f1'")
+        } else {
+            results.check(false, "Resolves alias 'f-studio' to 'f1'")
+        }
+        
+        // 3. Explicit Engine Selection
+        let resExplicitSupertonic = VoiceRegistry.resolve(query: "", explicitEngine: "supertonic")
+        if case .supertonic(let voice, _, _, _) = resExplicitSupertonic {
+            results.check(voice == "m1", "Defaults to 'm1' when supertonic engine is selected without explicit voice")
+        } else {
+            results.check(false, "Defaults to 'm1' for supertonic engine")
+        }
+        
+        // 4. Custom JSON Style File
+        let resJSON = VoiceRegistry.resolve(query: "/path/to/custom_voice.json")
+        if case .supertonic(let voice, let isCustom, let url, _) = resJSON {
+            results.check(voice == "custom_voice" && isCustom && url?.lastPathComponent == "custom_voice.json",
+                          "Detects direct .json file path as custom Supertonic style")
+        } else {
+            results.check(false, "Detects direct .json file path as custom Supertonic style")
+        }
+        
+        // 5. Language code mapping
+        let codeEn = SupertonicEngine.resolveLanguageCode("English")
+        let codeEs = SupertonicEngine.resolveLanguageCode("spanish")
+        let codeKo = SupertonicEngine.resolveLanguageCode("ko-kr")
+        let codeJa = SupertonicEngine.resolveLanguageCode("ja")
+        let codeDe = SupertonicEngine.resolveLanguageCode("german")
+        let codeFr = SupertonicEngine.resolveLanguageCode("French")
+        results.check(codeEn == "en" && codeEs == "es" && codeKo == "ko" && codeJa == "ja" && codeDe == "de" && codeFr == "fr",
+                      "Normalizes language names and locales to Supertonic ISO codes (en, es, ko, ja, de, fr)")
     }
 }

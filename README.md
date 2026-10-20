@@ -1,21 +1,23 @@
 # sayx
 
 > Next-generation neural speech synthesis CLI for macOS on Apple Silicon.  
-> Powered by **Kokoro-82M (Apple Neural Engine)** and **PocketTTS (FlowLM + Mimi)**.
+> Powered by **Kokoro-82M (Apple Neural Engine)**, **PocketTTS (FlowLM + Mimi)**, and **Supertonic-3 (ANE Flow-Matching Diffusion)**.
 
-`sayx` is a drop-in modern evolution of macOS `/usr/bin/say`. It provides studio-quality neural text-to-speech with sub-200ms time-to-first-audio, on-device voice cloning in pure Swift, 78+ natural voices across 9 languages, CoreAudio DSP time-pitch modulation, Accelerate SIMD loudness normalization, and a Unix Domain Socket streaming daemon with real-time JSON telemetry.
+`sayx` is a drop-in modern evolution of macOS `/usr/bin/say`. It provides studio-quality neural text-to-speech with sub-200ms time-to-first-audio, 44.1 kHz studio diffusion output, on-device voice cloning in pure Swift, 88+ natural voices across 31 languages, CoreAudio DSP time-pitch modulation, Accelerate SIMD loudness normalization, and a Unix Domain Socket streaming daemon with real-time JSON telemetry.
 
 ---
 
 ## Key Features
 
-- **Apple Neural Engine (ANE) Acceleration:** Kokoro-82M runs directly on the 16-core NPU via CoreML. Zero host CPU/GPU load, sub-200ms latency to first audio chunk. See [Architecture Documentation](docs/architecture.md).
-- **78+ Natural Voices Across 9 Languages:** 54 Kokoro voices, 24 PocketTTS studio cast voices, and dynamic multi-speaker dialogue with inline tags (`[v:adam] ... [v:bella]`). See [Voice Catalog](docs/voices.md).
+- **Apple Neural Engine (ANE) Acceleration:** Kokoro-82M and Supertonic-3 run directly on the 16-core NPU via CoreML. Up to ~94% ANE execution with fixed-bucket INT4 quantization, zero host CPU/GPU load, and sub-200ms latency to first audio chunk. See [Architecture Documentation](docs/architecture.md).
+- **88+ Natural Voices Across 31 Languages:** 54 Kokoro voices, 24 PocketTTS studio cast voices, 10 Supertonic-3 character styles (`m1`–`m5`, `f1`–`f5`) with friendly aliases (`m-narrator`, `f-studio`), and dynamic multi-speaker dialogue with inline tags (`[v:heart] ... [v:m-narrator,l:es]`). See [Voice Catalog](docs/voices.md).
+- **Studio-Quality 44.1 kHz Audio:** Supertonic-3 delivers broadcast 44.1 kHz Float32 sound with full flow-matching diffusion inference directly on the Apple Neural Engine.
+- **In-Memory Sample-Rate Harmonization:** Seamlessly mix 24.0 kHz (Kokoro, PocketTTS) and 44.1 kHz (Supertonic) voices in the exact same audio stream or dialogue script without clicks or drift via CoreAudio `AVAudioConverter`.
 - **On-Device Voice Cloning:** Clone any voice locally in ~1.5s from a short reference audio clip (`.wav`, `.mp3`, `.m4a`) using PocketTTS and the Mimi neural audio codec. No cloud dependencies or API keys required. See [Voice Cloning Guide](docs/cloning.md).
 - **CoreAudio DSP & Accelerate SIMD Normalization:** Pitch-invariant speed stretching (0.03x to 32.0x) and semitone pitch modulation (-2400 to +2400 cents) via `AVAudioUnitTimePitch`, paired with -1.0 dBFS peak normalization via Apple Accelerate `vDSP`. See [Audio DSP Guide](docs/audio-dsp.md).
 - **Unix Domain Socket Daemon:** Headless streaming daemon (`sayx listen`) over `/tmp/sayx.sock` with bidirectional JSON telemetry and master recording capture (`--tee`). See [Daemon Guide](docs/daemon.md).
 - **Offline File Export:** Render long-form audio directly to WAV files at >25x real-time speed.
-- **Built-in Diagnostic Test Suite:** Comprehensive test harness (`sayx test`) validating SIMD math, audio filters, sentence tokenization, and voice routing.
+- **Built-in Diagnostic Test Suite:** Comprehensive test harness (`sayx test`) validating SIMD math, sample rate converters, audio filters, sentence tokenization, and voice routing.
 
 ---
 
@@ -73,6 +75,23 @@ echo "Build succeeded in 12 seconds." | sayx
 cat story.txt | sayx -v adam
 ```
 
+### Supertonic-3 (44.1 kHz Studio Diffusion)
+
+```bash
+# Synthesize with Supertonic-3 on Apple Neural Engine
+sayx -e supertonic -v m1 "That was an incredible performance. Let's do it again."
+
+# Multi-lingual speech across 31 languages
+sayx -e supertonic -v f-studio -l es "Bienvenidos al episodio de hoy."
+sayx -e supertonic -v m-narrator -l ja "こんにちは、世界。"
+
+# Customize diffusion ODE evaluation steps (default: 5)
+sayx -v m-narrator --steps 8 "High-fidelity flow-matching diffusion on ANE."
+
+# Use custom JSON voice style tensors
+sayx -v /path/to/custom_style.json "Speech synthesized from custom style weights."
+```
+
 ### Speed & Pitch Control (CoreAudio DSP)
 
 ```bash
@@ -91,6 +110,7 @@ sayx -v adam --pitch 200 "Speaking two semitones higher."
 ```bash
 # Export speech to WAV at >25x real-time speed
 sayx -v cosette -s 1.1 "There is a castle on a cloud." -o castle.wav
+sayx -e supertonic -v f1 "Studio audio exported at 44.1 kHz." -o studio.wav
 ```
 
 ### Voice Cloning & Multi-Character Dialogue
@@ -105,8 +125,8 @@ sayx voice list
 # 3. Speak with your cloned voice
 sayx -v brooke "Hello! This voice was cloned directly on my Mac."
 
-# 4. Mix multiple voices in a single stream
-sayx "[v:adam] Access granted. [v:brooke] All systems operational." -o dialogue.wav
+# 4. Mix multiple voices and engines in a single stream (automatic sample rate adaptation)
+sayx "[v:heart] Access granted. [v:m-narrator,l:es] ¡Hola amigos! All systems operational." -o dialogue.wav
 ```
 
 ### Unix Domain Socket Streaming Daemon
@@ -148,11 +168,12 @@ Commands:
 
 TTS Options:
   -v, --voice <VOICE>    Voice alias, canonical ID, or cloned preset [default: heart]
-  -o, --output <FILE>    Export speech to a WAV file instead of playing through speakers
-  -e, --engine <ENGINE>  Force engine: 'kokoro' (ANE) or 'pocket' (FlowLM+Mimi)
-  -l, --lang <LANG>      Language code: 'en', 'es', 'fr', 'de', 'it', 'pt'
   -s, --speed <RATE>     Playback speed multiplier (0.03 to 32.0) [default: 1.0]
       --pitch <CENTS>    Pitch shift in cents (-2400 to +2400) [default: 0.0]
+      --steps <STEPS>    Diffusion ODE evaluation steps (1-50, Supertonic default: 5)
+  -o, --output <FILE>    Export speech to a WAV file instead of playing through speakers
+  -e, --engine <ENGINE>  Force engine: 'kokoro' (ANE), 'pocket' (FlowLM), or 'supertonic' (ANE Diffusion)
+  -l, --lang <LANG>      Language code (e.g. en, es, fr, de, ja, ko, zh; 31 langs supported) [default: en]
   -p, --phonemes         Print phonemized IPA representation to stdout and exit
       --show-phonemes    Print phonemized IPA representation before speaking
       --from-phonemes    Treat input text directly as pre-computed IPA phonemes (bypass G2P)
@@ -165,6 +186,7 @@ Daemon Options (sayx listen):
   -e, --engine <ENGINE>  Default engine for incoming streams
       --speed <RATE>     Playback speed multiplier [default: 1.0]
       --pitch <CENTS>    Pitch shift in cents [default: 0.0]
+      --steps <STEPS>    Diffusion evaluation steps [default: 5]
       --tee <FILE.WAV>   Save all audio streamed through daemon to disk
 ```
 
@@ -177,6 +199,7 @@ Daemon Options (sayx listen):
 - **On-Demand Downloads:** Models are **not** bundled into the binary or downloaded at build time. Weights are fetched over HTTPS on first use only when a voice requiring that specific model is requested.
   - **[Kokoro-82M CoreML](https://huggingface.co/FluidInference/kokoro-82m-coreml):** ~130 MB total (~90 MB model + ~40 MB tokenizer). Downloaded on first Kokoro synthesis.
   - **[PocketTTS FlowLM + Mimi](https://huggingface.co/FluidInference/pocket-tts-coreml):** ~569 MB. Downloaded only when using PocketTTS voices (`alba`), `-e pocket`, or `voice clone`.
+  - **[Supertonic-3 Flow-Matching CoreML](https://huggingface.co/FluidInference/supertonic-3-coreml):** ~72 MB total (~32 MB INT4 bucketed vector estimator + ~40 MB vocoder/text encoder). Downloaded on first Supertonic use.
 - **Local Storage Path:** Models are cached in standard user space at `~/.cache/fluidaudio/Models/`. Custom voice presets are stored in `~/.cache/sayx/voices/`.
 - **100% Offline:** Once downloaded, `sayx` runs completely offline with zero network requests or analytics telemetry.
 - **Cache Management:** Free up disk space anytime via `rm -rf ~/.cache/fluidaudio/Models`. See [Model Storage Guide](docs/models.md) for full details.
@@ -187,11 +210,11 @@ Daemon Options (sayx listen):
 
 Comprehensive guides are organized in the [`docs/`](docs/) directory:
 
-- [Voice Catalog & Routing (`docs/voices.md`)](docs/voices.md): Complete list of 78+ Kokoro-82M and PocketTTS voices, character profiles, language mappings, inline tags, and phonemization.
+- [Voice Catalog & Routing (`docs/voices.md`)](docs/voices.md): Complete list of 88+ Kokoro-82M, PocketTTS, and Supertonic-3 voices, character profiles, language mappings, and inline multi-speaker dialogue.
 - [Voice Cloning Guide (`docs/cloning.md`)](docs/cloning.md): Reference audio requirements, automatic pre-processing, CLI commands, and on-disk preset storage.
 - [Model Storage & Offline Operation (`docs/models.md`)](docs/models.md): Detailed download sources, exact file sizes, cache layout on disk, and offline usage guarantees.
 - [Unix Domain Socket Daemon (`docs/daemon.md`)](docs/daemon.md): Socket architecture, line protocol, bidirectional JSON telemetry events, client examples (Python, Node.js), and backpressure control.
-- [CoreAudio DSP & Accelerate Normalization (`docs/audio-dsp.md`)](docs/audio-dsp.md): Phase-vocoder speed and pitch stretching, offline rendering, and Accelerate SIMD peak/RMS loudness normalization.
+- [CoreAudio DSP & Accelerate Normalization (`docs/audio-dsp.md`)](docs/audio-dsp.md): Phase-vocoder speed and pitch stretching, sample rate adaptation, and Accelerate SIMD peak/RMS loudness normalization.
 - [System Architecture (`docs/architecture.md`)](docs/architecture.md): Hardware acceleration topology (ANE vs GPU vs CPU), component design, memory management, and Swift 6 concurrency.
 
 ---
@@ -206,7 +229,7 @@ Sources/SayX/
 │   └── TestRunner.swift       # Built-in diagnostic test harness
 ├── Core/
 │   ├── AudioEffects.swift     # CoreAudio AVAudioUnitTimePitch phase-vocoder DSP
-│   ├── AudioNormalizer.swift  # Accelerate vDSP SIMD peak & RMS normalizer
+│   ├── AudioNormalizer.swift  # Accelerate vDSP SIMD peak & RMS normalizer + resampler
 │   ├── AudioStreamer.swift    # CoreAudio AVAudioEngine player with buffer telemetry
 │   ├── SentenceSplitter.swift # NaturalLanguage sentence segmentation and tag parsing
 │   └── WavWriter.swift        # Broadcast WAV file encoder
@@ -214,9 +237,10 @@ Sources/SayX/
 │   ├── TTSEngine.swift        # Unified speech engine protocol
 │   ├── KokoroEngine.swift     # Kokoro-82M on Apple Neural Engine (CoreML)
 │   ├── PocketEngine.swift     # PocketTTS FlowLM + Mimi codec on GPU
-│   └── EngineDispatcher.swift # Async actor routing voices dynamically across engines
+│   ├── SupertonicEngine.swift # Supertonic-3 flow-matching diffusion on ANE (CoreML)
+│   └── EngineDispatcher.swift # Dynamic actor routing voices and adapting sample rates
 ├── Voices/
-│   ├── VoiceRegistry.swift    # Catalog of 78+ voices and dynamic engine resolution
+│   ├── VoiceRegistry.swift    # Catalog of 88+ voices, aliases, and dynamic resolution
 │   ├── VoiceCloner.swift      # Mimi reference audio normalizer & encoder
 │   └── VoicePreset.swift      # ~/.cache/sayx/voices/ preset persistence
 ├── IPC/
@@ -231,5 +255,5 @@ Sources/SayX/
 
 - Released under the [Apache License 2.0](LICENSE). Copyright 2026 Guillermo Estrada.
 - Speech synthesis runtime powered by [FluidAudio](https://github.com/FluidInference/FluidAudio).
-- Model weights and architectures derived from [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by `@hexgrad` and [PocketTTS](https://github.com/kyutai-labs/pocket-tts) by Kyutai Labs.
+- Model weights and architectures derived from [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by `@hexgrad`, [PocketTTS](https://github.com/kyutai-labs/pocket-tts) by Kyutai Labs, and Supertonic-3 by Supertone/FluidInference.
 - CoreML ANE and GPU optimizations by `@FluidInference` and `@laishere`.

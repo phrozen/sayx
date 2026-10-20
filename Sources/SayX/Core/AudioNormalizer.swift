@@ -69,6 +69,86 @@ public enum AudioNormalizer {
         vDSP_vsmul(samples, 1, &gain, &samples, 1, vDSP_Length(samples.count))
     }
     
+    /// Resamples an in-memory array of Float32 audio samples from `fromRate` to `toRate`.
+    ///
+    /// Fast-path returns the original array directly if sample rates match.
+    /// Otherwise converts via CoreAudio's `AVAudioConverter` in microseconds.
+    public static func resample(
+        samples: [Float],
+        fromRate: Double,
+        toRate: Double
+    ) throws -> [Float] {
+        guard !samples.isEmpty else { return [] }
+        if abs(fromRate - toRate) < 1.0 {
+            return samples
+        }
+        
+        guard let sourceFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: fromRate,
+            channels: 1,
+            interleaved: false
+        ),
+        let targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: toRate,
+            channels: 1,
+            interleaved: false
+        ) else {
+            throw NSError(
+                domain: "AudioNormalizer",
+                code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create CoreAudio formats for resampling (\(fromRate) -> \(toRate))"]
+            )
+        }
+        
+        guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
+            throw NSError(
+                domain: "AudioNormalizer",
+                code: 11,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to initialize AVAudioConverter for \(fromRate) -> \(toRate)"]
+            )
+        }
+        
+        let frameCount = AVAudioFrameCount(samples.count)
+        guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: frameCount) else {
+            throw NSError(domain: "AudioNormalizer", code: 12, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate source buffer"])
+        }
+        sourceBuffer.frameLength = frameCount
+        if let channelData = sourceBuffer.floatChannelData {
+            samples.withUnsafeBufferPointer { ptr in
+                if let base = ptr.baseAddress {
+                    memcpy(channelData[0], base, samples.count * MemoryLayout<Float>.stride)
+                }
+            }
+        }
+        
+        let ratio = toRate / fromRate
+        let destCapacity = AVAudioFrameCount(Double(frameCount) * ratio + 1024)
+        guard let destBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: destCapacity) else {
+            throw NSError(domain: "AudioNormalizer", code: 13, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate destination buffer"])
+        }
+        
+        var error: NSError?
+        var allRead = false
+        converter.convert(to: destBuffer, error: &error) { _, outStatus in
+            if allRead {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            allRead = true
+            outStatus.pointee = .haveData
+            return sourceBuffer
+        }
+        if let err = error { throw err }
+        
+        guard let channelData = destBuffer.floatChannelData else {
+            throw NSError(domain: "AudioNormalizer", code: 14, userInfo: [NSLocalizedDescriptionKey: "Invalid converted channel data"])
+        }
+        
+        return Array(UnsafeBufferPointer(start: channelData[0], count: Int(destBuffer.frameLength)))
+    }
+    
     /// Reads an audio file (WAV, MP3, M4A, etc.), converts to 24kHz mono Float32,
     /// peak-normalizes it to -1.0 dBFS, and writes a normalized WAV file to destination.
     public static func normalizeAudioFile(at sourceURL: URL, to destinationURL: URL) throws {
